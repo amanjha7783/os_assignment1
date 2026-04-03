@@ -1,0 +1,2 @@
+Assignment 4 - Question 3 Explanation: fork() creates parent and child processes. Child executes first because parent uses wait(). Both processes run independently.
+cd ~/os_assignment
