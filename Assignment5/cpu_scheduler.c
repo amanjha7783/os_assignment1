@@ -1,180 +1,387 @@
-/* cpu_scheduler.c — FCFS, SJF, RR, Priority scheduling simulator */
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <time.h>
 
-#define MAX 50
+#define MAX 100
 
 typedef struct {
-    int pid, arrival, burst, priority;
-    int waiting, turnaround, response, remaining, start;
-    int started;
+    int pid, arrival, burst, remaining, priority;
+    int start, completion, waiting, turnaround, response;
+    int visited;
 } Process;
 
-Process procs[MAX];
+Process original[MAX], p[MAX];
 int n;
 
-/* ── Random data generator ── */
-void generate_processes(int count) {
-    n = count;
-    srand(time(NULL));
-    printf("\n%-5s %-10s %-12s %-10s\n",
-           "PID", "Arrival", "Burst", "Priority");
-    printf("%-5s %-10s %-12s %-10s\n",
-           "---", "-------", "-----", "--------");
-    for (int i = 0; i < n; i++) {
-        procs[i].pid      = i + 1;
-        procs[i].arrival  = rand() % 10;
-        procs[i].burst    = rand() % 10 + 1;
-        procs[i].priority = rand() % 5 + 1;
-        procs[i].remaining = procs[i].burst;
-        procs[i].started  = 0;
-        printf("P%-4d %-10d %-12d %-10d\n",
-               procs[i].pid, procs[i].arrival,
-               procs[i].burst, procs[i].priority);
+float cpuUtil[10];
+char *names[] = {"FCFS","RR-2","RR-4","SJF","SRTN","PRIORITY"};
+
+// -----------------------------
+void copy_processes() {
+    for(int i=0;i<n;i++)
+        p[i] = original[i];
+}
+
+// -----------------------------
+void generate_processes() {
+    srand(time(0));
+    for(int i=0;i<n;i++) {
+        original[i].pid = i;
+        original[i].arrival = rand() % 10;
+        original[i].burst = (rand() % 9) + 1;
+        original[i].remaining = original[i].burst;
+        original[i].priority = rand() % 5 + 1;
+
+        original[i].start = -1;
+        original[i].visited = 0;
     }
 }
 
-void reset() {
-    for (int i = 0; i < n; i++) {
-        procs[i].waiting = procs[i].turnaround = procs[i].response = 0;
-        procs[i].remaining = procs[i].burst;
-        procs[i].started = 0;
-    }
+// -----------------------------
+void print_gantt_line(int time) {
+    printf("\nTime: ");
+    for(int i=0;i<=time;i++)
+        printf("%-4d", i);
+    printf("\n");
 }
 
-void print_results(char *algo) {
-    float avg_wt = 0, avg_rt = 0, avg_tat = 0;
-    printf("\n=== %s ===\n", algo);
-    printf("%-5s %-10s %-12s %-12s\n",
-           "PID", "Wait", "Response", "Turnaround");
-    for (int i = 0; i < n; i++) {
-        printf("P%-4d %-10d %-12d %-12d\n",
-               procs[i].pid, procs[i].waiting,
-               procs[i].response, procs[i].turnaround);
-        avg_wt  += procs[i].waiting;
-        avg_rt  += procs[i].response;
-        avg_tat += procs[i].turnaround;
+// -----------------------------
+float calculate_metrics(Process proc[]) {
+    float wt=0, tat=0, rt=0;
+
+    printf("\n-------------------------------------------------------------\n");
+    printf("%-5s %-5s %-5s %-5s %-5s %-5s %-5s\n",
+           "PID","AT","BT","CT","WT","TAT","RT");
+    printf("-------------------------------------------------------------\n");
+
+    for(int i=0;i<n;i++) {
+        proc[i].turnaround = proc[i].completion - proc[i].arrival;
+        proc[i].waiting = proc[i].turnaround - proc[i].burst;
+
+        wt += proc[i].waiting;
+        tat += proc[i].turnaround;
+        rt += proc[i].response;
+
+        printf("%-5d %-5d %-5d %-5d %-5d %-5d %-5d\n",
+            proc[i].pid, proc[i].arrival, proc[i].burst,
+            proc[i].completion, proc[i].waiting,
+            proc[i].turnaround, proc[i].response);
     }
-    printf("Avg Wait=%.2f  Avg Response=%.2f  Avg Turnaround=%.2f\n",
-           avg_wt/n, avg_rt/n, avg_tat/n);
+
+    printf("-------------------------------------------------------------\n");
+    printf("Avg WT: %-8.2f Avg TAT: %-8.2f Avg RT: %-8.2f\n",
+           wt/n, tat/n, rt/n);
+    printf("-------------------------------------------------------------\n");
+
+    return wt/n;
 }
 
-/* ── FCFS (sort by arrival, run in order) ── */
-void fcfs() {
-    reset();
-    int time = 0, done[MAX] = {0};
-    for (int c = 0; c < n; c++) {
-        int sel = -1, minArr = 99999;
-        for (int i = 0; i < n; i++)
-            if (!done[i] && procs[i].arrival < minArr) {
-                minArr = procs[i].arrival; sel = i;
+// -----------------------------
+float cpu_util(int idle, int total) {
+    return ((float)(total - idle) / total) * 100;
+}
+
+// -----------------------------
+// FCFS
+// -----------------------------
+void fcfs(int idx) {
+    copy_processes();
+    int time=0, idle=0;
+
+    for(int i=0;i<n-1;i++)
+        for(int j=i+1;j<n;j++)
+            if(p[i].arrival > p[j].arrival) {
+                Process t = p[i]; p[i]=p[j]; p[j]=t;
             }
-        if (time < procs[sel].arrival) time = procs[sel].arrival;
-        procs[sel].response   = time - procs[sel].arrival;
-        procs[sel].waiting    = time - procs[sel].arrival;
-        time                 += procs[sel].burst;
-        procs[sel].turnaround = time - procs[sel].arrival;
-        done[sel] = 1;
+
+    printf("\n\n==================== FCFS ====================\n");
+    printf("Gantt Chart:\n");
+
+    for(int i=0;i<n;i++) {
+        if(time < p[i].arrival) {
+            idle += (p[i].arrival - time);
+            time = p[i].arrival;
+        }
+
+        p[i].start = time;
+        p[i].response = time - p[i].arrival;
+
+        for(int j=0;j<p[i].burst;j++)
+            printf("| P%-2d ", p[i].pid);
+
+        time += p[i].burst;
+        p[i].completion = time;
     }
-    print_results("FCFS — First Come First Served");
+
+    printf("|\n");
+    print_gantt_line(time);
+
+    calculate_metrics(p);
+    cpuUtil[idx] = cpu_util(idle, time);
+
+    printf("\nCPU Utilization : %.2f%%\n", cpuUtil[idx]);
+    printf("====================================================\n");
 }
 
-/* ── SJF Non-preemptive ── */
-void sjf() {
-    reset();
-    int time = 0, done[MAX] = {0}, completed = 0;
-    while (completed < n) {
-        int sel = -1, minBurst = 99999;
-        for (int i = 0; i < n; i++)
-            if (!done[i] && procs[i].arrival <= time && procs[i].burst < minBurst) {
-                minBurst = procs[i].burst; sel = i;
+// -----------------------------
+// SJF
+// -----------------------------
+void sjf(int idx) {
+    copy_processes();
+    int time=0, completed=0, idle=0;
+
+    printf("\n\n==================== SJF ====================\n");
+    printf("Gantt Chart:\n");
+
+    while(completed < n) {
+        int idxp=-1, min=1e9;
+
+        for(int i=0;i<n;i++)
+            if(p[i].arrival<=time && !p[i].visited && p[i].burst<min) {
+                min=p[i].burst;
+                idxp=i;
             }
-        if (sel == -1) { time++; continue; }
-        procs[sel].waiting    = time - procs[sel].arrival;
-        procs[sel].response   = procs[sel].waiting;
-        time                 += procs[sel].burst;
-        procs[sel].turnaround = time - procs[sel].arrival;
-        done[sel] = 1; completed++;
-    }
-    print_results("SJF — Shortest Job First (Non-Preemptive)");
-}
 
-/* ── Round Robin ── */
-void round_robin(int quantum) {
-    reset();
-    int time = 0, done[MAX] = {0}, completed = 0;
-    int queue[MAX*100], front = 0, rear = 0;
-    int inQueue[MAX] = {0};
+        if(idxp!=-1) {
+            p[idxp].start=time;
+            p[idxp].response=time-p[idxp].arrival;
 
-    for (int i = 0; i < n; i++)
-        if (procs[i].arrival == 0) { queue[rear++] = i; inQueue[i] = 1; }
+            for(int j=0;j<p[idxp].burst;j++)
+                printf("| P%-2d ", p[idxp].pid);
 
-    while (completed < n) {
-        if (front == rear) { time++; continue; }
-        int i = queue[front++];
-        if (!procs[i].started) { procs[i].response = time - procs[i].arrival; procs[i].started = 1; }
-        int run = (procs[i].remaining < quantum) ? procs[i].remaining : quantum;
-        procs[i].remaining -= run; time += run;
-        for (int j = 0; j < n; j++)
-            if (!done[j] && !inQueue[j] && procs[j].arrival <= time)
-                { queue[rear++] = j; inQueue[j] = 1; }
-        if (procs[i].remaining > 0) queue[rear++] = i;
-        else {
-            procs[i].turnaround = time - procs[i].arrival;
-            procs[i].waiting    = procs[i].turnaround - procs[i].burst;
-            done[i] = 1; completed++;
+            time+=p[idxp].burst;
+            p[idxp].completion=time;
+            p[idxp].visited=1;
+            completed++;
+        } else {
+            idle++; time++;
         }
     }
-    char title[50];
-    sprintf(title, "Round Robin (Quantum=%d)", quantum);
-    print_results(title);
+
+    printf("|\n");
+    print_gantt_line(time);
+
+    calculate_metrics(p);
+    cpuUtil[idx]=cpu_util(idle,time);
+
+    printf("\nCPU Utilization : %.2f%%\n", cpuUtil[idx]);
+    printf("====================================================\n");
 }
 
-/* ── Priority (Non-preemptive) ── */
-void priority_np() {
-    reset();
-    int time = 0, done[MAX] = {0}, completed = 0;
-    while (completed < n) {
-        int sel = -1, minPri = 99999;
-        for (int i = 0; i < n; i++)
-            if (!done[i] && procs[i].arrival <= time && procs[i].priority < minPri) {
-                minPri = procs[i].priority; sel = i;
+// -----------------------------
+// SRTN
+// -----------------------------
+void srtn(int idx) {
+    copy_processes();
+    int time=0, completed=0, idle=0;
+
+    printf("\n\n==================== SRTN ====================\n");
+    printf("Gantt Chart:\n");
+
+    while(completed<n) {
+        int idxp=-1, min=1e9;
+
+        for(int i=0;i<n;i++)
+            if(p[i].arrival<=time && p[i].remaining>0 && p[i].remaining<min) {
+                min=p[i].remaining;
+                idxp=i;
             }
-        if (sel == -1) { time++; continue; }
-        procs[sel].response   = time - procs[sel].arrival;
-        procs[sel].waiting    = procs[sel].response;
-        time                 += procs[sel].burst;
-        procs[sel].turnaround = time - procs[sel].arrival;
-        done[sel] = 1; completed++;
+
+        if(idxp!=-1) {
+            if(p[idxp].start==-1) {
+                p[idxp].start=time;
+                p[idxp].response=time-p[idxp].arrival;
+            }
+
+            printf("| P%-2d ", p[idxp].pid);
+            p[idxp].remaining--;
+            time++;
+
+            if(p[idxp].remaining==0) {
+                p[idxp].completion=time;
+                completed++;
+            }
+        } else {
+            idle++; time++;
+        }
     }
-    print_results("Priority Scheduling (Non-Preemptive, lower=higher priority)");
+
+    printf("|\n");
+    print_gantt_line(time);
+
+    calculate_metrics(p);
+    cpuUtil[idx]=cpu_util(idle,time);
+
+    printf("\nCPU Utilization : %.2f%%\n", cpuUtil[idx]);
+    printf("====================================================\n");
 }
 
-int main() {
-    int algo, nproc, quantum;
-    printf("\nWelcome to CPU Scheduling Simulator\n");
-    printf("Scheduling Algorithm: (1)FCFS (2)RR (3)SJF (4)Priority (5)All\n");
-    scanf("%d", &algo);
-    printf("Number of processes: ");
-    scanf("%d", &nproc);
-    if (nproc > MAX) nproc = MAX;
+// -----------------------------
+// Round Robin
+// -----------------------------
+void rr(int q, int idx) {
+    copy_processes();
+    int queue[MAX], front=0,rear=0;
+    int time=0, completed=0, idle=0;
+    int inQ[MAX]={0};
 
-    printf("\nGenerating %d random processes...\n", nproc);
-    generate_processes(nproc);
+    printf("\n\n==================== RR (q=%d) ====================\n",q);
+    printf("Gantt Chart:\n");
 
-    switch(algo) {
-        case 1: fcfs(); break;
-        case 2:
-            printf("Time quantum: "); scanf("%d", &quantum);
-            round_robin(quantum); break;
-        case 3: sjf(); break;
-        case 4: priority_np(); break;
-        case 5:
-            fcfs(); sjf(); priority_np();
-            round_robin(2); round_robin(4); break;
-        default: printf("Invalid option\n");
+    while(completed<n) {
+        for(int i=0;i<n;i++)
+            if(p[i].arrival<=time && !inQ[i] && p[i].remaining>0) {
+                queue[rear++]=i;
+                inQ[i]=1;
+            }
+
+        if(front==rear) {
+            idle++; time++; continue;
+        }
+
+        int i=queue[front++];
+
+        if(p[i].start==-1) {
+            p[i].start=time;
+            p[i].response=time-p[i].arrival;
+        }
+
+        int run=(p[i].remaining<q)?p[i].remaining:q;
+
+        for(int j=0;j<run;j++)
+            printf("| P%-2d ", p[i].pid);
+
+        p[i].remaining-=run;
+        time+=run;
+
+        for(int j=0;j<n;j++)
+            if(p[j].arrival<=time && !inQ[j] && p[j].remaining>0) {
+                queue[rear++]=j;
+                inQ[j]=1;
+            }
+
+        if(p[i].remaining>0)
+            queue[rear++]=i;
+        else {
+            p[i].completion=time;
+            completed++;
+        }
     }
-    return 0;
+
+    printf("|\n");
+    print_gantt_line(time);
+
+    calculate_metrics(p);
+    cpuUtil[idx]=cpu_util(idle,time);
+
+    printf("\nCPU Utilization : %.2f%%\n", cpuUtil[idx]);
+    printf("====================================================\n");
+}
+
+// -----------------------------
+// Priority
+// -----------------------------
+void priority_sched(int idx) {
+    copy_processes();
+    int time=0, completed=0, idle=0;
+
+    printf("\n\n==================== PRIORITY ====================\n");
+    printf("Gantt Chart:\n");
+
+    while(completed<n) {
+        int idxp=-1, min=1e9;
+
+        for(int i=0;i<n;i++)
+            if(p[i].arrival<=time && !p[i].visited && p[i].priority<min) {
+                min=p[i].priority;
+                idxp=i;
+            }
+
+        if(idxp!=-1) {
+            p[idxp].start=time;
+            p[idxp].response=time-p[idxp].arrival;
+
+            for(int j=0;j<p[idxp].burst;j++)
+                printf("| P%-2d ", p[idxp].pid);
+
+            time+=p[idxp].burst;
+            p[idxp].completion=time;
+            p[idxp].visited=1;
+            completed++;
+        } else {
+            idle++; time++;
+        }
+    }
+
+    printf("|\n");
+    print_gantt_line(time);
+
+    calculate_metrics(p);
+    cpuUtil[idx]=cpu_util(idle,time);
+
+    printf("\nCPU Utilization : %.2f%%\n", cpuUtil[idx]);
+    printf("====================================================\n");
+}
+
+// -----------------------------
+// Comparison
+// -----------------------------
+void comparison() {
+    printf("\n\n================ FINAL COMPARISON ================\n");
+    printf("%-12s %-10s\n", "Algorithm", "CPU(%)");
+    printf("---------------------------------------------\n");
+
+    for(int i=0;i<6;i++)
+        printf("%-12s %-10.2f\n", names[i], cpuUtil[i]);
+
+    printf("===============================================\n");
+}
+
+// -----------------------------
+// MAIN MENU
+// -----------------------------
+int main() {
+    int choice;
+
+    printf("Enter number of processes: ");
+    scanf("%d", &n);
+
+    generate_processes();
+
+    while(1) {
+        printf("\n\n=========== CPU SCHEDULING MENU ===========\n");
+        printf("1. FCFS\n");
+        printf("2. Round Robin (q=2)\n");
+        printf("3. Round Robin (q=4)\n");
+        printf("4. SJF\n");
+        printf("5. SRTN\n");
+        printf("6. Priority\n");
+        printf("7. Run ALL + Compare\n");
+        printf("0. Exit\n");
+        printf("Enter choice: ");
+        scanf("%d", &choice);
+
+        switch(choice) {
+            case 1: fcfs(0); break;
+            case 2: rr(2,1); break;
+            case 3: rr(4,2); break;
+            case 4: sjf(3); break;
+            case 5: srtn(4); break;
+            case 6: priority_sched(5); break;
+            case 7:
+                fcfs(0);
+                rr(2,1);
+                rr(4,2);
+                sjf(3);
+                srtn(4);
+                priority_sched(5);
+                comparison();
+                break;
+            case 0:
+                printf("Exiting...\n");
+                return 0;
+            default:
+                printf("Invalid choice!\n");
+        }
+    }
 }
